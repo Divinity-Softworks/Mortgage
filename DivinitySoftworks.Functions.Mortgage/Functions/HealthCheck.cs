@@ -9,7 +9,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 using static Amazon.Lambda.Annotations.APIGateway.HttpResults;
 
-namespace DS.Functions.Mortgage;
+namespace DS.Functions;
 
 /// <summary>
 /// HealthCheck class performs a health check for the service.

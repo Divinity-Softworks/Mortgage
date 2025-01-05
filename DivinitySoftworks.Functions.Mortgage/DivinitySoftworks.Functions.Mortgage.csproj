@@ -10,15 +10,17 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Generate ready to run images during publishing to improvement cold starts. -->
     <PublishReadyToRun>true</PublishReadyToRun>
+    <RootNamespace>$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Amazon.Lambda.Core" Version="2.5.0" />
     <PackageReference Include="Amazon.Lambda.DynamoDBEvents" Version="3.1.1" />
     <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.4" />
-    <PackageReference Include="AWSSDK.SimpleNotificationService" Version="3.7.400.70" />
-    <PackageReference Include="DivinitySoftworks.AWS.Core.Data.DynamoDB" Version="0.1.38" />
-    <PackageReference Include="DivinitySoftworks.AWS.Core.Web.Functions" Version="0.1.39" />
+    <PackageReference Include="DivinitySoftworks.AWS.Core.Data.DynamoDB" Version="0.1.43" />
+    <PackageReference Include="DivinitySoftworks.AWS.Core.Net.EventBus" Version="0.1.45" />
+    <PackageReference Include="DivinitySoftworks.AWS.Core.Web.Functions" Version="0.1.41" />
     <PackageReference Include="DivinitySoftworks.Core" Version="0.1.10" />
+    <PackageReference Include="DivinitySoftworks.Core.Net" Version="0.1.24" />
   </ItemGroup>
   <!-- 
     The FrameworkReference is used to reduce the deployment bundle size by not having to include 

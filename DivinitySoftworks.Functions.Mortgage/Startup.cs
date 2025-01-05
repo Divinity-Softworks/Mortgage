@@ -1,10 +1,9 @@
 using Amazon;
 using Amazon.DynamoDBv2;
 using Amazon.Lambda.Core;
-using Amazon.SimpleNotificationService;
+using DivinitySoftworks.AWS.Core.Data.DynamoDB.Settings;
 using DivinitySoftworks.Core.Web.Security;
 using DivinitySoftworks.Functions.Mortgage.Repositories;
-using DivinitySoftworks.Functions.Mortgage.Settings;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -37,9 +36,10 @@ public class Startup {
         else
             services.AddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient(RegionEndpoint.EUWest3));
 
-        services.AddSingleton<IAmazonSimpleNotificationService>(new AmazonSimpleNotificationServiceClient(RegionEndpoint.EUWest3));
+        services.AddSimpleNotificationService(configuration);
 
         services.AddSingleton<IMortgageInterestRepository, MortgageInterestRepository>();
+        services.AddSingleton<IMortgageUserRepository, MortgageUserRepository>();
 
         services.Configure<AuthorizationOptions>(configuration.GetSection(AuthorizationOptions.Authorization));
         services.AddOpenIdConnect();

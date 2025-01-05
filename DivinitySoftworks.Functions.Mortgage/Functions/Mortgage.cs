@@ -4,21 +4,23 @@ using Amazon.Lambda.Annotations.APIGateway;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.DynamoDBEvents;
-using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
-using DivinitySoftworks.Core.Extentions;
-using DivinitySoftworks.Core.Web.Errors;
 using DivinitySoftworks.AWS.Core.Web.Functions;
+using DivinitySoftworks.Core.Extentions;
+using DivinitySoftworks.Core.Net.EventBus;
+using DivinitySoftworks.Core.Net.Mail;
+using DivinitySoftworks.Core.Web.Errors;
 using DivinitySoftworks.Core.Web.Security;
 using DivinitySoftworks.Functions.Mortgage.Contracts.Requests;
 using DivinitySoftworks.Functions.Mortgage.Contracts.Responses;
 using DivinitySoftworks.Functions.Mortgage.Data;
 using DivinitySoftworks.Functions.Mortgage.Repositories;
 using System.Data;
+using System.Net.Mail;
 using System.Text.Json;
 using static Amazon.Lambda.Annotations.APIGateway.HttpResults;
 
-namespace DS.Functions.Mortgage;
+namespace DS.Functions;
 
 /// <summary>
 /// The Mortgage class provides functionality to handle mortgage-related API requests.
@@ -27,6 +29,9 @@ namespace DS.Functions.Mortgage;
 public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) : ExecutableFunction(authorizeService) {
     const string RootBase = "/mortgage";
     const string RootResourceName = "DSMortgage";
+    const string TopicArn = "arn:aws:sns:eu-west-3:654654294266:sns-notification-email";
+    const string SenderAddress = "Mortgage @ Divinity Softworks <mortgage@divinity-softworks.com>";
+    const string Subject = "New mortgage rates available.";
 
     /// <summary>
     /// Handles DynamoDB stream events, specifically reacting to new INSERT operations.
@@ -40,7 +45,9 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
     /// <returns>A task that represents the asynchronous operation.</returns>
     [LambdaFunction(ResourceName = $"{RootResourceName}{nameof(UpdateLatestAsync)}")]
     public async Task UpdateLatestAsync(DynamoDBEvent dynamoEvent, ILambdaContext context,
-        [FromServices] IMortgageInterestRepository mortgageInterestRepository) {
+        [FromServices] IPublisher publisher,
+        [FromServices] IMortgageInterestRepository mortgageInterestRepository,
+        [FromServices] IMortgageUserRepository mortgageUserRepository) {
         try {
             foreach (DynamoDBEvent.DynamodbStreamRecord? record in dynamoEvent.Records) {
                 if (!record.EventName.Equals("INSERT", StringComparison.CurrentCultureIgnoreCase)) continue;
@@ -64,13 +71,51 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
 
                 mortgageInterest.MarkAsLatest();
 
-                // Attempt to create the new mortgage interest in the repository
+                // Attempt to create the new latest mortgage interest in the repository
                 if (!await mortgageInterestRepository.CreateAsync(mortgageInterest))
                     throw new DataException("Creating new latest mortgage interest debt ratio has failed!");
 
-                // Attempt to create the new mortgage interest in the repository
+                // Delete the old latest mortgage interest in the repository
                 if (latestMortgageInterest is not null)
                     await mortgageInterestRepository.DeleteAsync(latestMortgageInterest.PK, latestMortgageInterest.SK);
+
+                // Notify the users about the updated rates.
+                foreach (MortgageInterestUser mortgageInterestUser in await mortgageUserRepository.ReadAsync(mortgageInterest.BankId)) {
+                    string dataRows = string.Empty;
+
+                    foreach (DivinitySoftworks.Functions.Mortgage.Data.Mortgage mortgage in mortgageInterestUser.Mortgages.Distinct()) {
+                        DebtMarketRatio? oldDebtMarketRatio = latestMortgageInterest?.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
+                        DebtMarketRatio? newDebtMarketRatio = mortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
+
+                        string oldRate = oldDebtMarketRatio != null
+                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%"
+                            : "N/A";
+
+                        string newRate = newDebtMarketRatio != null
+                            ? newDebtMarketRatio.Interest.ToString("F2") + "%"
+                            : "N/A";
+
+                        string rateDifference = (oldDebtMarketRatio != null && newDebtMarketRatio != null)
+                            ? (newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest).ToString("F2") + "%"
+                            : "N/A";
+
+                        dataRows += @$" <tr>
+                                            <td>{mortgage.Years}</td>
+                                            <td>{mortgage.Ratio}</td>
+                                            <td class=""old-rate"">{oldRate}</td>
+                                            <td class=""new-rate"">{newRate}</td>
+                                            <td class=""rate-difference"">{rateDifference}</td>
+                                        </tr>";
+                    }
+
+                    EmailTemplateMessage emailMessage = new(new(SenderAddress), "mortgage-new-rates") {
+                        To = [new MailAddress(mortgageInterestUser.Email, mortgageInterestUser.FullName).ToString()],
+                        Subject = Subject,
+                        Parameters = { { "DATAROWS", dataRows } }
+                    };
+
+                    await publisher.PublishAsync<string, PublishResponse>(TopicArn, JsonSerializer.Serialize(emailMessage)!);
+                }
             }
         }
         catch (Exception exception) {
@@ -200,121 +245,76 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
     public async Task<IHttpResult> GetMailTestAsync(
         ILambdaContext context,
         APIGatewayHttpApiV2ProxyRequest request,
-        [FromServices] IAmazonSimpleNotificationService snsClient,
-        [FromServices] IMortgageInterestRepository mortgageInterestRepository) {
+        [FromServices] IPublisher publisher,
+        [FromServices] IMortgageInterestRepository mortgageInterestRepository,
+        [FromServices] IMortgageUserRepository mortgageUserRepository) {
 
         return await ExecuteAsync(Authorize.AllowAnonymous, context, request, async () => {
 
             try {
+                foreach (MortgageInterestUser mortgageInterestUser in (await mortgageUserRepository.ReadAsync(Guid.Parse("E798B0C6-5065-4804-ABD1-C8C4761CB745")))) {
+
+                    MortgageInterest newMortgageInterest = new () {
+                        Date = 0,
+                        Name = "ING",
+                        PK = "E798B0C6-5065-4804-ABD1-C8C4761CB745",
+                    };
+
+                    newMortgageInterest.DebtMarketRatios.Add(new () {
+                        Years = 10,
+                        Interest = 4.65m,
+                        Ratio = 100
+                    });
+
+                    // Get the latest record.
+                    MortgageInterest? latestMortgageInterest = await mortgageInterestRepository.ReadLatestAsync("E798B0C6-5065-4804-ABD1-C8C4761CB745");
+
+                    if (latestMortgageInterest is null) return Accepted();
+
+                    string dataRows = string.Empty;
+
+                    foreach (DivinitySoftworks.Functions.Mortgage.Data.Mortgage mortgage in mortgageInterestUser.Mortgages.Distinct()) {
+                        DebtMarketRatio? oldDebtMarketRatio = latestMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
+                        DebtMarketRatio? newDebtMarketRatio = newMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
+
+                        string oldRate = oldDebtMarketRatio != null 
+                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%" 
+                            : "N/A";
+
+                        string newRate = newDebtMarketRatio != null 
+                            ? newDebtMarketRatio.Interest.ToString("F2") + "%" 
+                            : "N/A";
+
+                        string rateDifference = (oldDebtMarketRatio != null && newDebtMarketRatio != null)
+                            ? (newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest).ToString("F2") + "%"
+                            : "N/A";
 
 
-                EmailMessage emailMessage = new EmailMessage() {
-                    Subject = subject,
-                    Body = htmlBody,
-                    Recipient = receiverAddress
-                };
+                        dataRows += @$" <tr>
+                                            <td>{mortgage.Years}</td>
+                                            <td>{mortgage.Ratio}</td>
+                                            <td class=""old-rate"">{oldRate}</td>
+                                            <td class=""new-rate"">{newRate}</td>
+                                            <td class=""rate-difference"">{rateDifference}</td>
+                                        </tr>";
+                    }
 
-                string message = JsonSerializer.Serialize(emailMessage);
+                    EmailTemplateMessage emailMessage = new(new(SenderAddress), "mortgage-new-rates") {
+                        To = [new MailAddress(mortgageInterestUser.Email, mortgageInterestUser.FullName).ToString()],
+                        Subject = Subject,
+                        Parameters = { { "DATAROWS", dataRows } }
+                    };
 
-                var request = new PublishRequest {
-                    TopicArn = topicArn,
-                    Message = message
-                };
+                    PublishResponse? response = await publisher.PublishAsync<string, PublishResponse>(TopicArn, JsonSerializer.Serialize(emailMessage)!);
 
-                var response = await snsClient.PublishAsync(request);
-
-                Console.WriteLine($"Message sent to topic {topicArn}. Message ID: {response.MessageId}");
+                    Console.WriteLine($"Message sent to topic {TopicArn}. Message ID: {response!.MessageId}");
+                }
             }
             catch (Exception ex) {
                 Console.WriteLine($"Failed to publish message to SNS: {ex.Message}");
             }
 
-
-
-
-            //// Replace USWest2 with the AWS Region you're using for Amazon SES.
-            //// Acceptable values are EUWest1, USEast1, and USWest2.
-            //using (var client = new AmazonSimpleEmailServiceClient(RegionEndpoint.EUWest3)) {
-            //    var sendRequest = new SendEmailRequest {
-            //        Source = senderAddress,
-            //        Destination = new Destination {
-            //            ToAddresses =
-            //            new List<string> { receiverAddress }
-            //        },
-            //        Message = new Message {
-            //            Subject = new Content(subject),
-            //            Body = new Body {
-            //                Html = new Content {
-            //                    Charset = "UTF-8",
-            //                    Data = htmlBody
-            //                },
-            //                Text = new Content {
-            //                    Charset = "UTF-8",
-            //                    Data = textBody
-            //                }
-            //            }
-            //        },
-            //        // If you are not using a configuration set, comment
-            //        // or remove the following line 
-            //        //ConfigurationSetName = configSet
-            //    };
-            //    try {
-            //        context.Logger.LogWarning("Sending email using Amazon SES...");
-            //        var response = await client.SendEmailAsync(sendRequest);
-            //        context.Logger.LogWarning("The email was sent successfully.");
-            //    }
-            //    catch (Exception ex) {
-
-            //        context.Logger.LogError("The email was not sent.");
-            //        context.Logger.LogError(ex.Message);
-
-            //    }
-            //}
-
-
             return Accepted();
         });
     }
-
-
-    static readonly string topicArn = "arn:aws:sns:eu-west-3:654654294266:sns-notification-email";
-
-    // Replace sender@example.com with your "From" address.
-    // This address must be verified with Amazon SES.
-    static readonly string senderAddress = "mortgage@divinity-softworks.com";
-
-    // Replace recipient@example.com with a "To" address. If your account
-    // is still in the sandbox, this address must be verified.
-    static readonly string receiverAddress = "m.keeman@outlook.com";
-
-    // The configuration set to use for this email. If you do not want to use a
-    // configuration set, comment out the following property and the
-    // ConfigurationSetName = configSet argument below. 
-    //static readonly string configSet = "ConfigSet";
-
-    // The subject line for the email.
-    static readonly string subject = "Amazon SES test (AWS SDK for .NET)";
-
-    // The email body for recipients with non-HTML email clients.
-    static readonly string textBody = "Amazon SES Test (.NET)\r\n"
-                                    + "This email was sent through Amazon SES "
-                                    + "using the AWS SDK for .NET.";
-
-    // The HTML body of the email.
-    static readonly string htmlBody = @"<html>
-<head></head>
-<body>
-  <h1>Amazon SES Test (AWS SDK for .NET)</h1>
-  <p>This email was sent with
-    <a href='https://aws.amazon.com/ses/'>Amazon SES</a> using the
-    <a href='https://aws.amazon.com/sdk-for-net/'>
-      AWS SDK for .NET</a>.</p>
-</body>
-</html>";
-
-}
-public class EmailMessage {
-    public string Subject { get; set; }
-    public string Body { get; set; }
-    public string Recipient { get; set; }
 }
