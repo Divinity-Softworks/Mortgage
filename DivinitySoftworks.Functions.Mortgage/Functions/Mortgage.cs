@@ -80,7 +80,16 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                     await mortgageInterestRepository.DeleteAsync(latestMortgageInterest.PK, latestMortgageInterest.SK);
 
                 // Notify the users about the updated rates.
-                foreach (MortgageInterestUser mortgageInterestUser in await mortgageUserRepository.ReadAsync(mortgageInterest.BankId)) {
+                IEnumerable<MortgageInterestUser> mortgageInterestUsers = await mortgageUserRepository.ReadAsync(mortgageInterest.BankId);
+
+                if (!mortgageInterestUsers.Any()) {
+                    context.Logger.LogInformation("No users to notify about the updated mortgage rates.");
+                    return;
+                }
+
+                context.Logger.LogInformation("Will notify {Number} user(s) about the updated mortgage rates.", mortgageInterestUsers.Count());
+
+                foreach (MortgageInterestUser mortgageInterestUser in mortgageInterestUsers) {
                     string dataRows = string.Empty;
 
                     foreach (DivinitySoftworks.Functions.Mortgage.Data.Mortgage mortgage in mortgageInterestUser.Mortgages.Distinct()) {
@@ -254,13 +263,13 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
             try {
                 foreach (MortgageInterestUser mortgageInterestUser in (await mortgageUserRepository.ReadAsync(Guid.Parse("E798B0C6-5065-4804-ABD1-C8C4761CB745")))) {
 
-                    MortgageInterest newMortgageInterest = new () {
+                    MortgageInterest newMortgageInterest = new() {
                         Date = 0,
                         Name = "ING",
                         PK = "E798B0C6-5065-4804-ABD1-C8C4761CB745",
                     };
 
-                    newMortgageInterest.DebtMarketRatios.Add(new () {
+                    newMortgageInterest.DebtMarketRatios.Add(new() {
                         Years = 10,
                         Interest = 4.65m,
                         Ratio = 100
@@ -277,12 +286,12 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                         DebtMarketRatio? oldDebtMarketRatio = latestMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
                         DebtMarketRatio? newDebtMarketRatio = newMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
 
-                        string oldRate = oldDebtMarketRatio != null 
-                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%" 
+                        string oldRate = oldDebtMarketRatio != null
+                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%"
                             : "N/A";
 
-                        string newRate = newDebtMarketRatio != null 
-                            ? newDebtMarketRatio.Interest.ToString("F2") + "%" 
+                        string newRate = newDebtMarketRatio != null
+                            ? newDebtMarketRatio.Interest.ToString("F2") + "%"
                             : "N/A";
 
                         string rateDifference = (oldDebtMarketRatio != null && newDebtMarketRatio != null)

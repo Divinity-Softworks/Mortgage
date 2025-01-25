@@ -2,11 +2,10 @@
 using Amazon.Lambda.Annotations.APIGateway;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
-using DivinitySoftworks.AWS.Core.Web.Functions.Contracts;
 using DivinitySoftworks.AWS.Core.Web.Functions;
+using DivinitySoftworks.AWS.Core.Web.Functions.Contracts;
 using DivinitySoftworks.Core.Web.Security;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-
 using static Amazon.Lambda.Annotations.APIGateway.HttpResults;
 
 namespace DS.Functions;

@@ -18,7 +18,7 @@
     <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.4" />
     <PackageReference Include="DivinitySoftworks.AWS.Core.Data.DynamoDB" Version="0.1.43" />
     <PackageReference Include="DivinitySoftworks.AWS.Core.Net.EventBus" Version="0.1.45" />
-    <PackageReference Include="DivinitySoftworks.AWS.Core.Web.Functions" Version="0.1.41" />
+    <PackageReference Include="DivinitySoftworks.AWS.Core.Web.Functions" Version="0.1.52" />
     <PackageReference Include="DivinitySoftworks.Core" Version="0.1.10" />
     <PackageReference Include="DivinitySoftworks.Core.Net" Version="0.1.24" />
   </ItemGroup>
