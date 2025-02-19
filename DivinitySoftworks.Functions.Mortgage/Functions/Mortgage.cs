@@ -18,6 +18,7 @@ using DivinitySoftworks.Functions.Mortgage.Repositories;
 using System.Data;
 using System.Net.Mail;
 using System.Text.Json;
+
 using static Amazon.Lambda.Annotations.APIGateway.HttpResults;
 
 namespace DS.Functions;
@@ -96,31 +97,47 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                         DebtMarketRatio? oldDebtMarketRatio = latestMortgageInterest?.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
                         DebtMarketRatio? newDebtMarketRatio = mortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
 
-                        string oldRate = oldDebtMarketRatio != null
-                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%"
-                            : "N/A";
+                        decimal rateDifference = (oldDebtMarketRatio is not null && newDebtMarketRatio is not null)
+                                ? newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest
+                                : 0;
 
-                        string newRate = newDebtMarketRatio != null
-                            ? newDebtMarketRatio.Interest.ToString("F2") + "%"
-                            : "N/A";
+                        string rateDifferenceColor = (rateDifference > 0) ? "red" : "green";
+                        string rateDifferenceText = (rateDifference == 0) ? "&nbsp;" : ((rateDifference > 0) ? $"+{rateDifference:F2}%" : $"-{rateDifference:F2}%");
 
-                        string rateDifference = (oldDebtMarketRatio != null && newDebtMarketRatio != null)
-                            ? (newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest).ToString("F2") + "%"
-                            : "N/A";
+                        dataRows += $@" <tr>
+                                            <td style=""height: 15px;""></td>
+                                        </tr>
+                                        <tr>
+                                            <td style=""background: #15194E !important; padding: 20px; border-radius: 10px;"">
+                                                <h2 style=""margin: 0 0 16px 0;"">{mortgageInterest.Name} | {mortgage.Years} years</h2>           
+						                        <table width=""100%"" style=""font-size: 14px;"">
+							                        <tr>
+								                        <td style=""background: #090D25 !important; padding: 20px; border-radius: 16px; width: 50%;"">
+									                        <p style=""color: #a0aec0 !important; margin: 0;"">Dept Market Ratio</p>
+									                        <h2 style=""margin:0;"">{mortgage.Ratio}%</h2>
+								                        </td>
+								                        <td style=""width: 15px;"">&nbsp;</td>
+								                        <td style=""background: #090D25 !important; padding: 20px; border-radius: 16px; width: 50%;"">
+									                        <p style=""color: #a0aec0 !important; margin: 0;"">Interest</p>
+									                        <h2 style=""margin:0;"">
+										                        <span>{newDebtMarketRatio!.Interest:F2}%</span>
 
-                        dataRows += @$" <tr>
-                                            <td>{mortgage.Years}</td>
-                                            <td>{mortgage.Ratio}</td>
-                                            <td class=""old-rate"">{oldRate}</td>
-                                            <td class=""new-rate"">{newRate}</td>
-                                            <td class=""rate-difference"">{rateDifference}</td>
+										                        <span style=""font-size: 16px; color: {rateDifferenceColor};"">{rateDifferenceText}</span>
+									                        </h2>
+								                        </td>
+							                        </tr>						
+						                        </table>
+                                            </td>
                                         </tr>";
                     }
 
                     EmailTemplateMessage emailMessage = new(new(SenderAddress), "mortgage-new-rates") {
                         To = [new MailAddress(mortgageInterestUser.Email, mortgageInterestUser.FullName).ToString()],
                         Subject = Subject,
-                        Parameters = { { "DATAROWS", dataRows } }
+                        Parameters = {
+                                { "FULLNAME", $"{mortgageInterestUser.FirstName} {mortgageInterestUser.LastName}" },
+                                { "DATAROWS", dataRows }
+                            }
                     };
 
                     await publisher.PublishAsync<string, PublishResponse>(TopicArn, JsonSerializer.Serialize(emailMessage)!);
@@ -202,18 +219,33 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
         ILambdaContext context,
         APIGatewayHttpApiV2ProxyRequest request,
         string identifier,
-        [FromServices] IMortgageInterestRepository mortgageInterestRepository) {
+        [FromServices] IMortgageInterestRepository mortgageInterestRepository,
+        [FromServices] IMortgageUserRepository mortgageUserRepository) {
 
         return await ExecuteAsync(Authorize.Required, context, request, async () => {
             if (!Guid.TryParse(identifier, out Guid bankIdentifier))
                 return BadRequest(new ErrorResponse("bad_request", "The 'identifier' url path parameter is in an invalid GUID format."));
+
+            if (string.IsNullOrWhiteSpace(_authorizeService.UserId))
+                return Unauthorized(new ErrorResponse("invalid_token", "The token does not contain a valid user id."));
+
+            MortgageInterestUser? mortgageInterestUser = await mortgageUserRepository.ReadAsync(bankIdentifier, _authorizeService.UserId);
+
+            if (mortgageInterestUser is null)
+                return Forbid(new ErrorResponse("forbidden", "The logged in user does not have access to the requested bank mortgage rates."));
 
             IEnumerable<MortgageInterest> mortgageInterests = await mortgageInterestRepository.ReadAsync(bankIdentifier.ToString());
 
             if (!mortgageInterests.Any())
                 return NotFound(new ErrorResponse("not_found", $"No mortgage interest rates are found for the bank with identifier: '{identifier}'."));
 
-            return Ok(mortgageInterests.Select(mortgageInterest => new MortgageInterestResponse(mortgageInterest)));
+            UserMortgageInterestResponse userMortgageInterestResponse = new() {
+                UserId = mortgageInterestUser.UserId,
+                Mortgages = mortgageInterestUser.Mortgages.Select(userMortgageInterest => new UserMortgageResponse(mortgageInterestUser.BankId, userMortgageInterest)),
+                MortgageInterests = mortgageInterests.Select(mortgageInterest => new MortgageInterestResponse(mortgageInterest))
+            };
+
+            return Ok(userMortgageInterestResponse);
         });
     }
 
@@ -286,32 +318,48 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                         DebtMarketRatio? oldDebtMarketRatio = latestMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
                         DebtMarketRatio? newDebtMarketRatio = newMortgageInterest.DebtMarketRatios.FirstOrDefault(d => d.Years == mortgage.Years && d.Ratio == mortgage.Ratio);
 
-                        string oldRate = oldDebtMarketRatio != null
-                            ? oldDebtMarketRatio.Interest.ToString("F2") + "%"
-                            : "N/A";
+                        decimal rateDifference = (oldDebtMarketRatio is not null && newDebtMarketRatio is not null)
+                            ? newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest
+                            : 0;
 
-                        string newRate = newDebtMarketRatio != null
-                            ? newDebtMarketRatio.Interest.ToString("F2") + "%"
-                            : "N/A";
+                        string rateDifferenceColor = (rateDifference > 0) ? "red" : "green";
+                        string rateDifferenceText = (rateDifference == 0) ? "&nbsp;" : ((rateDifference > 0) ? $"+{rateDifference:F2}%" : $"-{rateDifference:F2}%");
 
-                        string rateDifference = (oldDebtMarketRatio != null && newDebtMarketRatio != null)
-                            ? (newDebtMarketRatio.Interest - oldDebtMarketRatio.Interest).ToString("F2") + "%"
-                            : "N/A";
+                        dataRows += $@" <tr>
+                                            <td style=""height: 15px;""></td>
+                                        </tr>
+                                        <tr>
+                                            <td style=""background: #15194E !important; padding: 20px; border-radius: 10px;"">
+                                                <h2 style=""margin: 0 0 16px 0;"">{latestMortgageInterest.Name} | {mortgage.Years} years</h2>
+                           
+							                    <table width=""100%"" style=""font-size: 14px;"">
+								                    <tr>
+									                    <td style=""background: #090D25 !important; padding: 20px; border-radius: 16px; width: 50%;"">
+										                    <p style=""color: #a0aec0 !important; margin: 0;"">Dept Market Ratio</p>
+										                    <h2 style=""margin:0;"">{mortgage.Ratio}%</h2>
+									                    </td>
+									                    <td style=""width: 15px;"">&nbsp;</td>
+									                    <td style=""background: #090D25 !important; padding: 20px; border-radius: 16px; width: 50%;"">
+										                    <p style=""color: #a0aec0 !important; margin: 0;"">Interest</p>
+										                    <h2 style=""margin:0;"">
+											                    <span>{newDebtMarketRatio!.Interest:F2}%</span>
 
-
-                        dataRows += @$" <tr>
-                                            <td>{mortgage.Years}</td>
-                                            <td>{mortgage.Ratio}</td>
-                                            <td class=""old-rate"">{oldRate}</td>
-                                            <td class=""new-rate"">{newRate}</td>
-                                            <td class=""rate-difference"">{rateDifference}</td>
+											                    <span style=""font-size: 16px; color: {rateDifferenceColor};"">{rateDifferenceText}</span>
+										                    </h2>
+									                    </td>
+								                    </tr>						
+							                    </table>
+                                            </td>
                                         </tr>";
                     }
 
                     EmailTemplateMessage emailMessage = new(new(SenderAddress), "mortgage-new-rates") {
                         To = [new MailAddress(mortgageInterestUser.Email, mortgageInterestUser.FullName).ToString()],
                         Subject = Subject,
-                        Parameters = { { "DATAROWS", dataRows } }
+                        Parameters = {
+                            { "FULLNAME", $"{mortgageInterestUser.FirstName} {mortgageInterestUser.LastName}" },
+                            { "DATAROWS", dataRows }
+                        }
                     };
 
                     PublishResponse? response = await publisher.PublishAsync<string, PublishResponse>(TopicArn, JsonSerializer.Serialize(emailMessage)!);

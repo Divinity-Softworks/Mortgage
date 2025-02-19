@@ -14,4 +14,9 @@ public sealed record Mortgage {
     /// Gets or sets the number of years associated with the mortgage, often used to calculate the repayment term.
     /// </summary>
     public int Years { get; set; }
+
+    /// <summary>
+    /// Gets or sets the date the mortgage has started.
+    /// </summary>
+    public long Date { get; init; } = default!;
 }
