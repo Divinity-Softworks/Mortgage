@@ -102,7 +102,7 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                                 : 0;
 
                         string rateDifferenceColor = (rateDifference > 0) ? "red" : "green";
-                        string rateDifferenceText = (rateDifference == 0) ? "&nbsp;" : ((rateDifference > 0) ? $"+{rateDifference:F2}%" : $"-{rateDifference:F2}%");
+                        string rateDifferenceText = (rateDifference == 0) ? "&nbsp;" : ((rateDifference > 0) ? $"+{rateDifference:F2}%" : $"{rateDifference:F2}%");
 
                         dataRows += $@" <tr>
                                             <td style=""height: 15px;""></td>
