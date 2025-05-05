@@ -3,9 +3,6 @@ using DivinitySoftworks.Workers.Mortgage.Contracts.External.ING;
 using DivinitySoftworks.Workers.Mortgage.Contracts.Responses;
 using DivinitySoftworks.Workers.Mortgage.Data;
 
-using System.Globalization;
-using System.Text.RegularExpressions;
-
 namespace DivinitySoftworks.Workers.Mortgage.Services;
 
 /// <summary>
@@ -17,11 +14,11 @@ public interface IMortgageRatesService {
     /// </summary>
     /// <param name="bankId">The unique identifier for the bank.</param>
     /// <param name="bankName">The name of the bank.</param>
-    /// <param name="keyValuesCollection">The collection of key values containing mortgage interest data.</param>
+    /// <param name="interestRateCollection">The collection of key values containing mortgage interest data.</param>
     /// <returns>
     /// A <see cref="MortgageInterest"/> object if parsing is successful, or <c>null</c> if the required data is not found or unchanged.
     /// </returns>
-    MortgageInterest? Parse(Guid bankId, string bankName, KeyValuesCollection keyValuesCollection);
+    MortgageInterest? Parse(Guid bankId, string bankName, InterestRateCollection interestRateCollection);
     /// <summary>
     /// Processes the mortgage interest by posting it to an external service asynchronously.
     /// If successful, updates the local cache of mortgage interest rates with the new date.
@@ -46,20 +43,15 @@ public sealed class MortgageRatesService(IMortgageClient mortgageClient, ILogger
     readonly Dictionary<Guid, DateTime?> mortgageInterestDateTimes = [];
 
     /// <inheritdoc/>
-    public MortgageInterest? Parse(Guid bankId, string bankName, KeyValuesCollection keyValuesCollection) {
-        KeyValueGroup? keyValueGroup = keyValuesCollection.Groups.FirstOrDefault(g => g.Name == "prijs.hyp.vast");
-        if (keyValueGroup is null) {
-            _logger.LogWarning("Unable to parse, the group 'prijs.hyp.vast' was not found in the Key Value Collection.");
+    public MortgageInterest? Parse(Guid bankId, string bankName, InterestRateCollection interestRateCollection) {
+        // Check if the interest rate for the product 'IN002' is found. 'IN002' is 'Annuïteiten'.
+        FixedInterestRate? fixedInterestRate = interestRateCollection.FixedInterestRates.FirstOrDefault(fir => fir.ProductCode == "IN002");
+        if (fixedInterestRate is null) {
+            _logger.LogWarning("Unable to parse, the poduct code 'IN002' was not found in the Interest Rate Collection.");
             return null;
         }
 
-        Key? dateKey = keyValueGroup.Keys.FirstOrDefault(k => k.Name == "annuitair.inclABK.ingangsdatum.dmmmmjjjj");
-        if (dateKey is null) {
-            _logger.LogWarning("Unable to parse, the key 'annuitair.inclABK.ingangsdatum.dmmmmjjjj' was not found in the Key Value Collection.");
-            return null;
-        }
-
-        DateTime mortgageInterestDateTime = DateTime.ParseExact(dateKey.Value.ValueString, "d MMMM yyyy", new CultureInfo(dateKey.Value.Unit), DateTimeStyles.AssumeUniversal);
+        DateTime mortgageInterestDateTime = DateTime.UtcNow.Date;
 
         if (mortgageInterestDateTimes.TryGetValue(bankId, out DateTime? datetime) && datetime == mortgageInterestDateTime)
             return null;
@@ -70,19 +62,20 @@ public sealed class MortgageRatesService(IMortgageClient mortgageClient, ILogger
             Date = mortgageInterestDateTime.ToUnixTimeSeconds()
         };
 
-        string pattern = @"annuitair\.inclABK\.(\d{2})jaar\.tm(\d{3})\.perc";
-        foreach (Key key in keyValueGroup.Keys.Where(k => k.Name.StartsWith("annuitair.inclABK.") && k.Name.EndsWith(".perc"))) {
-            Match match = Regex.Match(key.Name, pattern);
+        foreach (RevisionPeriod revisionPeriod in fixedInterestRate.RevisionPeriods) {
+            foreach (LoanToValueRange loanToValueRange in revisionPeriod.LoanToValueRanges) {
+                DebtMarketRatio debtMarketRatio = new() {
+                    Years = revisionPeriod.Months / 12,
+                    Interest = (decimal)loanToValueRange.InterestRate
+                };
 
-            if (!match.Success) continue;
+                if (loanToValueRange.Interval is null || loanToValueRange.Interval.ToIncluding is null)
+                    continue;
 
-            mortgageInterest
-                .DebtMarketRatios
-                .Add(new DebtMarketRatio {
-                    Years = int.Parse(match.Groups[1].Value),
-                    Ratio = int.Parse(match.Groups[2].Value),
-                    Interest = decimal.Parse(key.Value.ValueString.Replace("%", string.Empty), new CultureInfo(key.Value.Unit))
-                });
+                debtMarketRatio.Ratio = loanToValueRange.Interval.ToIncluding.Value;
+
+                mortgageInterest.DebtMarketRatios.Add(debtMarketRatio);
+            }
         }
 
         return mortgageInterest;

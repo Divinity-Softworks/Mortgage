@@ -46,14 +46,14 @@ public class Worker(IServiceScopeFactory serviceScopeFactory, IMortgageRatesServ
                 using IServiceScope scope = _serviceScopeFactory.CreateScope();
                 IWebMonitorService webMonitorService = scope.ServiceProvider.GetRequiredService<IWebMonitorService>();
 
-                KeyValuesCollection? value = null;
+                InterestRateCollection? value = null;
                 while (tries < _maxTries) {
                     tries++;
                     value = null;
 
                     try {
                         _logger.LogInformation("Fetching from the web ({Tries} of {MaxTries}).", tries, _maxTries);
-                        value = await webMonitorService.FetchAsync("https://www.ing.nl/particulier/hypotheek/actuele-hypotheekrente");
+                        value = await webMonitorService.FetchAsync("https://www.ing.nl/particulier/hypotheek/actuele-hypotheekrente/actuele-hypotheekrente");
                     }
                     catch (Exception exception) {
                         _logger.LogWarning(exception, "Failed to fetch from the web ({Tries} of {MaxTries}).", tries, _maxTries);

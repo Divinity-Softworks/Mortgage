@@ -1,7 +1,7 @@
 ﻿using DivinitySoftworks.Workers.Mortgage.Contracts.External.ING;
-
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
 using System.Text.Json;
 
 namespace DivinitySoftworks.Workers.Mortgage.Services;
@@ -15,7 +15,7 @@ public interface IWebMonitorService {
     /// </summary>
     /// <param name="url">The URL to navigate to and monitor.</param>
     /// <returns>A task that represents the asynchronous operation, containing the key-values collection if found.</returns>
-    Task<KeyValuesCollection?> FetchAsync(string url);
+    Task<InterestRateCollection?> FetchAsync(string url);
 }
 
 /// <summary>
@@ -25,7 +25,7 @@ public sealed class WebMonitorService : IWebMonitorService {
     /// <summary>
     /// A task completion source used to signal the completion of the fetch operation.
     /// </summary>
-    readonly TaskCompletionSource<KeyValuesCollection?> taskCompletionSource;
+    readonly TaskCompletionSource<InterestRateCollection?> taskCompletionSource;
 
     /// <summary>
     /// A cancellation token source to manage task cancellation.
@@ -47,21 +47,23 @@ public sealed class WebMonitorService : IWebMonitorService {
     /// <param name="sender">The sender of the event, expected to be a <see cref="NetworkManager"/>.</param>
     /// <param name="e">The event arguments containing response data.</param>
     /// <exception cref="TypeLoadException">Thrown when the event sender is not of a <see cref="NetworkManager"/> type.</exception>
-    private void Network_NetworkResponseReceived(object? sender, NetworkResponseReceivedEventArgs e) {
-        if (!e.ResponseUrl.Contains("key-values")) return;
+    private async void Network_NetworkResponseReceived(object? sender, NetworkResponseReceivedEventArgs e) {
+        if (!e.ResponseUrl?.Contains("v2") is null) return;
+        if (!e.ResponseUrl!.Contains("v2")) return;
         if (string.IsNullOrWhiteSpace(e.ResponseBody)) return;
 
         NetworkManager networkManager = sender as NetworkManager
             ?? throw new TypeLoadException("The event sender is not of a 'NetworkManager' type.");
         networkManager.NetworkResponseReceived -= Network_NetworkResponseReceived;
-        networkManager.StopMonitoring();
+        await networkManager.StopMonitoring();
         cancellationTokenSource.Cancel();
-        KeyValuesCollection? rootobject = JsonSerializer.Deserialize<KeyValuesCollection>(e.ResponseBody);
+
+        InterestRateCollection? rootobject = JsonSerializer.Deserialize<InterestRateCollection>(e.ResponseBody);
         taskCompletionSource.SetResult(rootobject);
     }
 
     /// <inheritdoc/>
-    public async Task<KeyValuesCollection?> FetchAsync(string url) {
+    public async Task<InterestRateCollection?> FetchAsync(string url) {
         ChromeOptions chromeOptions = new();
         chromeOptions.AddArguments(new List<string>() {
             "--no-sandbox",
@@ -79,39 +81,49 @@ public sealed class WebMonitorService : IWebMonitorService {
         service.HideCommandPromptWindow = true;
 
         using ChromeDriver driver = new(service, chromeOptions);
-
         driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(30);
+        WebDriverWait wait = new(driver, TimeSpan.FromSeconds(30));
+
         NetworkManager network = driver.Manage().Network as NetworkManager
             ?? throw new TypeLoadException("The Chrome Driver Network not of a 'NetworkManager' type.");
+
+        await Task.Run(() => driver.Navigate().GoToUrl(url));
+
+        IJavaScriptExecutor javaScriptExecutor = driver;
+
+        IWebElement webElement = driver
+            .FindElement(By.CssSelector("ing-app-open-page"))
+            .GetShadowRoot()
+            .FindElement(By.ClassName("ing-app-open-page"))
+            .FindElement(By.CssSelector("[data-tag-name='experience-renderer']"))
+            .GetShadowRoot()
+            .FindElement(By.CssSelector("[data-tag-name='ing-default-layout']"))
+            .FindElement(By.CssSelector("[data-tag-name='ing-feat-frontend-mortgage-interest-rates-ing-feat-mortgage-actual-interest-rates']"))
+            .GetShadowRoot()
+            .FindElement(By.CssSelector("main"))
+            .FindElement(By.CssSelector("div.wrapper2"))
+            .FindElement(By.CssSelector("ing-feat-actual-interest-rates-form"))
+            .GetShadowRoot()
+            .FindElement(By.CssSelector("ing-form"))
+            .FindElement(By.Name("energyLabel"))
+            .FindElement(By.Name("energyLabel"));
 
         network.NetworkResponseReceived += Network_NetworkResponseReceived;
 
         await network.StartMonitoring();
 
-        int index = Task.WaitAny(GoToURL(driver, url), taskCompletionSource.Task);
+        new SelectElement(webElement)
+            .SelectByValue("EnergyLabel_Not_Available");
+
+
+        Task.WaitAny(Task.Delay(TimeSpan.FromSeconds(30), cancellationTokenSource.Token), taskCompletionSource.Task);
 
         driver.CloseDevToolsSession();
-        driver.Close();
+        driver.Quit();
 
-        if (index != 1)
-            return null;
+        if (taskCompletionSource.Task.IsCompleted)
+            return await taskCompletionSource.Task;
 
-        return taskCompletionSource.Task.Result;
-    }
-
-    /// <summary>
-    /// Navigates the ChromeDriver to the specified URL.
-    /// </summary>
-    /// <param name="driver">The ChromeDriver instance to navigate.</param>
-    /// <param name="url">The URL to navigate to.</param>
-    /// <returns>A task representing the navigation operation.</returns>
-    static Task GoToURL(ChromeDriver driver, string url) {
-        return Task.Run(() => {
-            try {
-                driver.Navigate().GoToUrl(url);
-            }
-            catch (WebDriverTimeoutException) {
-            }
-        });
+        return null;
     }
 }
