@@ -176,6 +176,13 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
             if (mortgageInterest is not null)
                 return Ok(new MortgageInterestResponse(mortgageInterest));
 
+            // Get the latest mortgage interest for the bank.
+            MortgageInterest? latestMortgageInterest = await mortgageInterestRepository.ReadLatestAsync(mortgageInterestRequest.BankId.ToString().ToUpper());
+
+            // Check if a newer value is added.
+            if (latestMortgageInterest is not null && latestMortgageInterest.Date > mortgageInterestRequest.Date)
+                return BadRequest(new ErrorResponse("bad_request", "The 'date' of the new mortgage rate request is older then the latest known rates in the database."));
+
             // Create a new mortgage interest object
             mortgageInterest = new MortgageInterest {
                 PK = mortgageInterestRequest.BankId.ToString(),
@@ -183,6 +190,11 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                 Name = mortgageInterestRequest.Name,
                 Date = mortgageInterestRequest.Date,
             };
+
+
+            // Compare the latest mortgage interest date with the new one.
+            if (latestMortgageInterest is not null && JsonSerializer.Serialize(latestMortgageInterest.DebtMarketRatios) == JsonSerializer.Serialize(mortgageInterest.DebtMarketRatios))
+                return Ok(new MortgageInterestResponse(mortgageInterest));
 
             // Add debt market ratios to the mortgage interest
             for (int i = 0; i < mortgageInterestRequest.DebtMarketRatios.Count; i++) {
