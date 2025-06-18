@@ -91,26 +91,35 @@ public sealed class WebMonitorService : IWebMonitorService {
 
         IJavaScriptExecutor javaScriptExecutor = driver;
 
+
         IWebElement webElement = driver
             .FindElement(By.CssSelector("ing-app-open-page"))
             .GetShadowRoot()
-            .FindElement(By.ClassName("ing-app-open-page"))
-            .FindElement(By.CssSelector("[data-tag-name='experience-renderer']"))
+            .QuerySelector(driver, ".ing-app-open-page")
+            .QuerySelector(driver, "[data-tag-name='experience-renderer']")
             .GetShadowRoot()
-            .FindElement(By.CssSelector("[data-tag-name='ing-default-layout']"))
-            .FindElement(By.CssSelector("[data-tag-name='ing-feat-frontend-mortgage-interest-rates-ing-feat-mortgage-actual-interest-rates']"))
+            .QuerySelector(driver, "[data-tag-name='ing-default-layout']")
+            .QuerySelector(driver, "[data-tag-name='ing-feat-frontend-mortgage-interest-rates-ing-feat-mortgage-actual-interest-rates']")
             .GetShadowRoot()
-            .FindElement(By.CssSelector("main"))
-            .FindElement(By.CssSelector("div.wrapper2"))
-            .FindElement(By.CssSelector("ing-feat-actual-interest-rates-form"))
+            .QuerySelector(driver, "main")
+            .QuerySelector(driver, "div.wrapper2")
+            .QuerySelector(driver, "ing-feat-mortgage-actual-interest-rates-component")
             .GetShadowRoot()
-            .FindElement(By.CssSelector("ing-form"))
-            .FindElement(By.Name("energyLabel"))
-            .FindElement(By.Name("energyLabel"));
+            .QuerySelector(driver, "ing-feat-actual-interest-rates-form")
+            .GetShadowRoot()
+            .QuerySelector(driver, "ing-form")
+            .QuerySelector(driver, "form")
+            .QuerySelector(driver, "div:nth-of-type(1)")
+            .QuerySelector(driver, "div:nth-of-type(2)")
+            .QuerySelector(driver, "ing-select")
+            .QuerySelector(driver, "select");
 
         network.NetworkResponseReceived += Network_NetworkResponseReceived;
 
         await network.StartMonitoring();
+
+
+        var element = new SelectElement(webElement);
 
         new SelectElement(webElement)
             .SelectByValue("EnergyLabel_Not_Available");

@@ -191,11 +191,6 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                 Date = mortgageInterestRequest.Date,
             };
 
-
-            // Compare the latest mortgage interest date with the new one.
-            if (latestMortgageInterest is not null && JsonSerializer.Serialize(latestMortgageInterest.DebtMarketRatios) == JsonSerializer.Serialize(mortgageInterest.DebtMarketRatios))
-                return Ok(new MortgageInterestResponse(mortgageInterest));
-
             // Add debt market ratios to the mortgage interest
             for (int i = 0; i < mortgageInterestRequest.DebtMarketRatios.Count; i++) {
                 mortgageInterest.DebtMarketRatios.Add(new DebtMarketRatio {
@@ -204,6 +199,10 @@ public sealed class Mortgage([FromServices] IAuthorizeService authorizeService) 
                     Interest = mortgageInterestRequest.DebtMarketRatios[i].Interest
                 });
             }
+
+            // Compare the latest mortgage interest date with the new one.
+            if (latestMortgageInterest is not null && JsonSerializer.Serialize(latestMortgageInterest.DebtMarketRatios) == JsonSerializer.Serialize(mortgageInterest.DebtMarketRatios))
+                return Ok(new MortgageInterestResponse(mortgageInterest));
 
             // Attempt to create the new mortgage interest in the repository
             if (!await mortgageInterestRepository.CreateAsync(mortgageInterest))
